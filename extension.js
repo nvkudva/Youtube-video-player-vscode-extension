@@ -68,6 +68,34 @@ function activate(context) {
       });
     }),
   );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("yt.searchSelected", async () => {
+      let query = "";
+
+      // Editor selection
+      const editor = vscode.window.activeTextEditor;
+      if (editor && !editor.selection.isEmpty) {
+        query = editor.document.getText(editor.selection).trim();
+      }
+
+      // Terminal selection — copy to clipboard then read
+      if (!query) {
+        await vscode.commands.executeCommand("workbench.action.terminal.copySelection");
+        query = (await vscode.env.clipboard.readText()).trim();
+      }
+
+      if (!query) {
+        vscode.window.showWarningMessage(
+          "Select some text first, then right-click → Search in YouTube."
+        );
+        return;
+      }
+
+      await vscode.commands.executeCommand("youtube-player.focus");
+      provider.triggerSearch(query);
+    })
+  );
 }
 
 function getFloatingPlayerContent(streamUrl, videoId) {
@@ -111,6 +139,7 @@ class YouTubeViewProvider {
 
   /** @param {vscode.WebviewView} webviewView */
   resolveWebviewView(webviewView) {
+    this._view = webviewView;
     webviewView.webview.options = {
       enableScripts: true,
       localResourceRoots: [this.extensionUri],
@@ -170,6 +199,13 @@ class YouTubeViewProvider {
         term.sendText(getInstallCommand());
       }
     });
+  }
+
+  triggerSearch(query) {
+    if (this._view) {
+      this._view.show(true); // true = preserve focus
+      this._view.webview.postMessage({ command: 'triggerSearch', query });
+    }
   }
 
   _getHtml() {
@@ -485,6 +521,13 @@ class YouTubeViewProvider {
     /* ── messages from extension host ── */
     window.addEventListener('message', event => {
         const msg = event.data;
+
+        if (msg.command === 'triggerSearch') {
+            document.getElementById('url').value = msg.query;
+            hideInstallBanner();
+            hideError();
+            doSearch(msg.query);
+        }
 
         if (msg.command === 'ytdlpMissing') {
             showInstallBanner();

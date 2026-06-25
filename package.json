@@ -32,6 +32,10 @@
       {
         "command": "yt.createFloatingPlayer",
         "title": "YouTube: Create Floating Player"
+      },
+      {
+        "command": "yt.searchSelected",
+        "title": "Search in YouTube"
       }
     ],
     "viewsContainers": {
@@ -50,6 +54,21 @@
           "type": "webview",
           "id": "youtube-player",
           "name": "YouTube Player"
+        }
+      ]
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "command": "yt.searchSelected",
+          "when": "editorHasSelection",
+          "group": "navigation@99"
+        }
+      ],
+      "terminal/context": [
+        {
+          "command": "yt.searchSelected",
+          "group": "navigation@99"
         }
       ]
     }
