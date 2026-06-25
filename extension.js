@@ -5,55 +5,68 @@ const { getStreamUrl, searchYoutube, isVideoId, isYouTubeUrl } = require('./lib/
  * @param {vscode.ExtensionContext} context
  */
 function activate(context) {
-    const state = { currentVideoId: null, currentStreamUrl: null, floatingPanel: null };
-    global.state = state;
+  const state = {
+    currentVideoId: null,
+    currentStreamUrl: null,
+    floatingPanel: null,
+  };
+  global.state = state;
 
-    const provider = new YouTubeViewProvider(context.extensionUri, state);
-    context.subscriptions.push(
-        vscode.window.registerWebviewViewProvider('youtube-player', provider)
-    );
+  const provider = new YouTubeViewProvider(context.extensionUri, state);
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider("youtube-player", provider),
+  );
 
-    context.subscriptions.push(
-        vscode.window.onDidChangeVisibleTextEditors(editors => {
-            if (editors.length === 0 && state.floatingPanel) {
-                setTimeout(() => {
-                    if (vscode.window.visibleTextEditors.length === 0 && state.floatingPanel) {
-                        state.floatingPanel.dispose();
-                    }
-                }, 500);
-            }
-        })
-    );
+  context.subscriptions.push(
+    vscode.window.onDidChangeVisibleTextEditors((editors) => {
+      if (editors.length === 0 && state.floatingPanel) {
+        setTimeout(() => {
+          if (
+            vscode.window.visibleTextEditors.length === 0 &&
+            state.floatingPanel
+          ) {
+            state.floatingPanel.dispose();
+          }
+        }, 500);
+      }
+    }),
+  );
 
-    context.subscriptions.push(
-        vscode.commands.registerCommand('yt.openVideoPlayer', () => {
-            vscode.commands.executeCommand('youtube-player.focus');
-        })
-    );
+  context.subscriptions.push(
+    vscode.commands.registerCommand("yt.openVideoPlayer", () => {
+      vscode.commands.executeCommand("youtube-player.focus");
+    }),
+  );
 
-    context.subscriptions.push(
-        vscode.commands.registerCommand('yt.createFloatingPlayer', () => {
-            if (state.floatingPanel) {
-                state.floatingPanel.reveal(vscode.ViewColumn.Beside);
-                return;
-            }
-            const panel = vscode.window.createWebviewPanel(
-                'youtubeFloatingPlayer', 'YouTube Player',
-                vscode.ViewColumn.Beside,
-                { enableScripts: true }
-            );
-            state.floatingPanel = panel;
-            panel.webview.html = getFloatingPlayerContent(state.currentStreamUrl, state.currentVideoId);
-            panel.onDidDispose(() => { state.floatingPanel = null; });
-            panel.webview.onDidReceiveMessage(msg => {
-                if (msg.command === 'minimize') panel.dispose();
-            });
-        })
-    );
+  context.subscriptions.push(
+    vscode.commands.registerCommand("yt.createFloatingPlayer", () => {
+      if (state.floatingPanel) {
+        state.floatingPanel.reveal(vscode.ViewColumn.Beside);
+        return;
+      }
+      const panel = vscode.window.createWebviewPanel(
+        "youtubeFloatingPlayer",
+        "YouTube Player",
+        vscode.ViewColumn.Beside,
+        { enableScripts: true },
+      );
+      state.floatingPanel = panel;
+      panel.webview.html = getFloatingPlayerContent(
+        state.currentStreamUrl,
+        state.currentVideoId,
+      );
+      panel.onDidDispose(() => {
+        state.floatingPanel = null;
+      });
+      panel.webview.onDidReceiveMessage((msg) => {
+        if (msg.command === "minimize") panel.dispose();
+      });
+    }),
+  );
 }
 
 function getFloatingPlayerContent(streamUrl, videoId) {
-    return `<!DOCTYPE html>
+  return `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -71,59 +84,83 @@ function getFloatingPlayerContent(streamUrl, videoId) {
 </head>
 <body>
     <div class="toolbar">
-        <span style="opacity:0.7;flex:1">${videoId ? `Video: ${videoId}` : 'No video loaded'}</span>
+        <span style="opacity:0.7;flex:1">${videoId ? `Video: ${videoId}` : "No video loaded"}</span>
         <button onclick="(acquireVsCodeApi)().postMessage({command:'minimize'})">Close</button>
     </div>
     <div class="video-wrap">
-        ${streamUrl
+        ${
+          streamUrl
             ? `<video src="${streamUrl}" controls autoplay></video>`
-            : `<div class="placeholder">Load a video from the sidebar player first</div>`}
+            : `<div class="placeholder">Load a video from the sidebar player first</div>`
+        }
     </div>
 </body>
 </html>`;
 }
 
 class YouTubeViewProvider {
-    constructor(extensionUri, state) {
-        this.extensionUri = extensionUri;
-        this.state = state;
-    }
+  constructor(extensionUri, state) {
+    this.extensionUri = extensionUri;
+    this.state = state;
+  }
 
-    /** @param {vscode.WebviewView} webviewView */
-    resolveWebviewView(webviewView) {
-        webviewView.webview.options = { enableScripts: true, localResourceRoots: [this.extensionUri] };
-        webviewView.webview.html = this._getHtml();
+  /** @param {vscode.WebviewView} webviewView */
+  resolveWebviewView(webviewView) {
+    webviewView.webview.options = {
+      enableScripts: true,
+      localResourceRoots: [this.extensionUri],
+    };
+    webviewView.webview.html = this._getHtml();
 
-        webviewView.webview.onDidReceiveMessage(async msg => {
-            if (msg.command === 'loadVideo') {
-                this.state.currentVideoId = msg.videoId;
-                webviewView.webview.postMessage({ command: 'loading', videoId: msg.videoId });
-                try {
-                    const url = await getStreamUrl(msg.videoId);
-                    this.state.currentStreamUrl = url;
-                    webviewView.webview.postMessage({ command: 'videoReady', url, videoId: msg.videoId });
-                    if (this.state.floatingPanel) {
-                        this.state.floatingPanel.webview.html = getFloatingPlayerContent(url, msg.videoId);
-                    }
-                } catch (err) {
-                    webviewView.webview.postMessage({ command: 'videoError', error: err.message });
-                }
-            } else if (msg.command === 'search') {
-                webviewView.webview.postMessage({ command: 'searching' });
-                try {
-                    const results = await searchYoutube(msg.query);
-                    webviewView.webview.postMessage({ command: 'searchResults', results });
-                } catch (err) {
-                    webviewView.webview.postMessage({ command: 'searchError', error: err.message });
-                }
-            } else if (msg.command === 'popOut') {
-                vscode.commands.executeCommand('yt.createFloatingPlayer');
-            }
+    webviewView.webview.onDidReceiveMessage(async (msg) => {
+      if (msg.command === "loadVideo") {
+        this.state.currentVideoId = msg.videoId;
+        webviewView.webview.postMessage({
+          command: "loading",
+          videoId: msg.videoId,
         });
-    }
+        try {
+          const url = await getStreamUrl(msg.videoId);
+          this.state.currentStreamUrl = url;
+          webviewView.webview.postMessage({
+            command: "videoReady",
+            url,
+            videoId: msg.videoId,
+          });
+          if (this.state.floatingPanel) {
+            this.state.floatingPanel.webview.html = getFloatingPlayerContent(
+              url,
+              msg.videoId,
+            );
+          }
+        } catch (err) {
+          webviewView.webview.postMessage({
+            command: "videoError",
+            error: err.message,
+          });
+        }
+      } else if (msg.command === "search") {
+        webviewView.webview.postMessage({ command: "searching" });
+        try {
+          const results = await searchYoutube(msg.query);
+          webviewView.webview.postMessage({
+            command: "searchResults",
+            results,
+          });
+        } catch (err) {
+          webviewView.webview.postMessage({
+            command: "searchError",
+            error: err.message,
+          });
+        }
+      } else if (msg.command === "popOut") {
+        vscode.commands.executeCommand("yt.createFloatingPlayer");
+      }
+    });
+  }
 
-    _getHtml() {
-        return `<!DOCTYPE html>
+  _getHtml() {
+    return `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -509,13 +546,16 @@ class YouTubeViewProvider {
 </script>
 </body>
 </html>`;
-    }
+  }
 }
 
 function deactivate() {
-    if (global.state && global.state.floatingPanel) {
-        global.state.floatingPanel.dispose();
-    }
+  if (global.state && global.state.floatingPanel) {
+    global.state.floatingPanel.dispose();
+  }
 }
 
-module.exports = { activate, deactivate, getStreamUrl, searchYoutube, formatDuration, isVideoId, isYouTubeUrl };
+module.exports = {
+  activate,
+  deactivate,
+};
