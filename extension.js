@@ -4,37 +4,26 @@ const {
   searchYoutube,
   isVideoId,
   isYouTubeUrl,
+  isYtdlpMissing,
+  getInstallCommand,
 } = require("./lib/utils");
+
+const state = {
+  currentVideoId: null,
+  currentStreamUrl: null,
+  floatingPanel: null,
+};
+
+/** @type {vscode.Disposable | null} */
+let autoCloseDisposable = null;
 
 /**
  * @param {vscode.ExtensionContext} context
  */
 function activate(context) {
-  const state = {
-    currentVideoId: null,
-    currentStreamUrl: null,
-    floatingPanel: null,
-  };
-  global.state = state;
-
   const provider = new YouTubeViewProvider(context.extensionUri, state);
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider("youtube-player", provider),
-  );
-
-  context.subscriptions.push(
-    vscode.window.onDidChangeVisibleTextEditors((editors) => {
-      if (editors.length === 0 && state.floatingPanel) {
-        setTimeout(() => {
-          if (
-            vscode.window.visibleTextEditors.length === 0 &&
-            state.floatingPanel
-          ) {
-            state.floatingPanel.dispose();
-          }
-        }, 500);
-      }
-    }),
   );
 
   context.subscriptions.push(
@@ -51,7 +40,7 @@ function activate(context) {
       }
       const panel = vscode.window.createWebviewPanel(
         "youtubeFloatingPlayer",
-        "YouTube Player",
+        "Youtube Helper",
         vscode.ViewColumn.Beside,
         { enableScripts: true },
       );
@@ -60,8 +49,29 @@ function activate(context) {
         state.currentStreamUrl,
         state.currentVideoId,
       );
+
+      // Register auto-close listener only when a floating panel exists
+      if (!autoCloseDisposable) {
+        autoCloseDisposable = vscode.window.onDidChangeVisibleTextEditors((editors) => {
+          if (editors.length === 0 && state.floatingPanel) {
+            setTimeout(() => {
+              if (
+                vscode.window.visibleTextEditors.length === 0 &&
+                state.floatingPanel
+              ) {
+                state.floatingPanel.dispose();
+              }
+            }, 500);
+          }
+        });
+      }
+
       panel.onDidDispose(() => {
         state.floatingPanel = null;
+        if (autoCloseDisposable) {
+          autoCloseDisposable.dispose();
+          autoCloseDisposable = null;
+        }
       });
       panel.webview.onDidReceiveMessage((msg) => {
         if (msg.command === "minimize") panel.dispose();
@@ -438,7 +448,7 @@ class YouTubeViewProvider {
         if (saved) { watchHistory = JSON.parse(saved); renderHistory(); }
     } catch (e) {}
 
-    /* ── input detection ── */
+    /* ── input detection (mirrors lib/utils.js) ── */
     function isYouTubeUrl(s) { return s.includes('youtube.com') || s.includes('youtu.be'); }
     function isVideoId(s) { return /^[A-Za-z0-9_-]{11}$/.test(s.trim()); }
 
@@ -675,8 +685,13 @@ class YouTubeViewProvider {
 }
 
 function deactivate() {
-  if (global.state && global.state.floatingPanel) {
-    global.state.floatingPanel.dispose();
+  if (state.floatingPanel) {
+    state.floatingPanel.dispose();
+    state.floatingPanel = null;
+  }
+  if (autoCloseDisposable) {
+    autoCloseDisposable.dispose();
+    autoCloseDisposable = null;
   }
 }
 

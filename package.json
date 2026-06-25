@@ -1,6 +1,6 @@
 {
   "name": "youtube-player",
-  "displayName": "youtube-player",
+  "displayName": "Youtube Helper",
   "description": "Watch YouTube videos directly in VS Code",
   "version": "0.0.1",
   "publisher": "kartikgangil",
@@ -21,7 +21,12 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onView:youtube-player",
+    "onCommand:yt.openVideoPlayer",
+    "onCommand:yt.createFloatingPlayer",
+    "onCommand:yt.searchSelected"
+  ],
   "main": "./extension.js",
   "contributes": {
     "commands": [
@@ -42,7 +47,7 @@
       "activitybar": [
         {
           "id": "youtube-sidebar",
-          "title": "YouTube",
+          "title": "YT",
           "icon": "$(play-circle)"
         }
       ]
@@ -53,7 +58,7 @@
           "icon": "icon.png",
           "type": "webview",
           "id": "youtube-player",
-          "name": "YouTube Player"
+          "name": "Youtube Helper"
         }
       ]
     },
@@ -68,6 +73,7 @@
       "terminal/context": [
         {
           "command": "yt.searchSelected",
+          "when": "terminalHasSelection",
           "group": "navigation@99"
         }
       ]

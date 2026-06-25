@@ -1,6 +1,6 @@
 const assert = require('assert');
 const vscode = require('vscode');
-const { formatDuration, isVideoId, isYouTubeUrl, getStreamUrl, searchYoutube } = require('../lib/utils');
+const { ytdlp, formatDuration, isVideoId, isYouTubeUrl, isYtdlpMissing, getInstallCommand, getStreamUrl, searchYoutube } = require('../lib/utils');
 
 suite('Extension Test Suite', () => {
     vscode.window.showInformationMessage('Start all tests.');
@@ -26,6 +26,14 @@ suite('Extension Test Suite', () => {
 
         test('formats long videos (24h)', () => {
             assert.strictEqual(formatDuration(86400), '24:00:00');
+        });
+
+        test('formats zero seconds', () => {
+            assert.strictEqual(formatDuration(0), '0:00');
+        });
+
+        test('floors non-integer seconds', () => {
+            assert.strictEqual(formatDuration(90.7), '1:30');
         });
     });
 
@@ -89,18 +97,65 @@ suite('Extension Test Suite', () => {
         });
     });
 
+    // ── isYtdlpMissing ────────────────────────────────────────────────────────
+
+    suite('isYtdlpMissing', () => {
+        test('detects yt-dlp not found error', () => {
+            const err = new Error('yt-dlp not found. Install it: brew install yt-dlp');
+            assert.strictEqual(isYtdlpMissing(err), true);
+        });
+
+        test('returns false for unrelated error', () => {
+            assert.strictEqual(isYtdlpMissing(new Error('something else')), false);
+        });
+
+        test('returns false for null', () => {
+            assert.strictEqual(isYtdlpMissing(null), false);
+        });
+
+        test('returns false for non-error objects', () => {
+            assert.strictEqual(isYtdlpMissing({ code: 'ENOENT' }), false);
+        });
+    });
+
+    // ── getInstallCommand ────────────────────────────────────────────────────
+
+    suite('getInstallCommand', () => {
+        test('returns a non-empty install command string', () => {
+            const cmd = getInstallCommand();
+            assert.ok(typeof cmd === 'string' && cmd.length > 0);
+            // Verify the command contains known package manager names
+            assert.ok(
+                cmd.includes('brew') || cmd.includes('winget') || cmd.includes('apt') || cmd.includes('dnf'),
+                `Unexpected command: ${cmd}`
+            );
+        });
+    });
+
+    // ── ytdlp (integration — requires yt-dlp installed) ──────────────────────
+
+    suite('ytdlp', function () {
+        this.timeout(5000);
+
+        test('resolves with version string for --version', async () => {
+            const out = await ytdlp(['--version']);
+            assert.ok(typeof out === 'string' && out.trim().length > 0);
+            assert.match(out.trim(), /^\d{4}\.\d{2}\.\d{2}$/);
+        });
+    });
+
     // ── getStreamUrl (integration — requires yt-dlp + network) ────────────────
 
     suite('getStreamUrl', function () {
         this.timeout(30000);
 
         test('returns an HTTPS stream URL for a known video', async () => {
-            const url = await getStreamUrl('dQw4w9WgXcQ');
+            const { url } = await getStreamUrl('dQw4w9WgXcQ');
             assert.ok(url.startsWith('https://'), `Expected HTTPS URL, got: ${url}`);
         });
 
         test('returned URL contains video/mp4 mime type indicator', async () => {
-            const url = await getStreamUrl('dQw4w9WgXcQ');
+            const { url } = await getStreamUrl('dQw4w9WgXcQ');
             assert.ok(
                 url.includes('mime=video%2Fmp4') || url.includes('.mp4'),
                 `Expected mp4 URL, got: ${url}`

@@ -1,4 +1,4 @@
-# VS Code YouTube Player Extension
+# Youtube Helper
 
 Watch YouTube videos directly in VS Code without leaving your coding environment. Uses **yt-dlp** to stream videos natively — no browser, no iframe, no YouTube policy blocks.
 
@@ -6,9 +6,9 @@ Watch YouTube videos directly in VS Code without leaving your coding environment
 
 - **Search YouTube** — type any keyword in the input field to search and browse results with thumbnails, channel names, and durations
 - **Play by URL or ID** — paste a `youtube.com` URL, a `youtu.be` short link, or a bare video ID to play instantly
-- **Native video playback** — streams via `yt-dlp`; plays in a native `<video>` element with full seek, pause, and volume controls
-- **Floating player** — pop out the player into a side panel so it stays visible while you code
+- **Search selected text** — select any text in the editor or terminal, right-click, and choose **Search in YouTube** to instantly search without copying and pasting
 - **Watch history** — your last 5 videos are saved and shown for quick replay
+- **Floating player** — pop out the player into a side panel so it stays visible while you code
 
 ## Requirements
 
@@ -17,11 +17,13 @@ Watch YouTube videos directly in VS Code without leaving your coding environment
 yt-dlp is a command-line tool used to resolve YouTube stream URLs. You must install it before videos will play.
 
 **macOS (Homebrew):**
+
 ```bash
 brew install yt-dlp
 ```
 
 **Windows / Linux:**
+
 ```bash
 pip install yt-dlp
 ```
@@ -29,11 +31,13 @@ pip install yt-dlp
 Or download the standalone binary from [github.com/yt-dlp/yt-dlp/releases](https://github.com/yt-dlp/yt-dlp/releases).
 
 **Verify installation:**
+
 ```bash
 yt-dlp --version
 ```
 
 **Keep yt-dlp up to date** (YouTube changes its internals frequently):
+
 ```bash
 yt-dlp -U
 # or
@@ -59,11 +63,12 @@ Click any result to start playing.
 ### Play a specific video
 
 Paste a YouTube URL or video ID into the input field and press **Enter**:
+Examples
 
 ```
 https://www.youtube.com/watch?v=dQw4w9WgXcQ
 https://youtu.be/dQw4w9WgXcQ
-dQw4w9WgXcQ
+learn vibe coding
 ```
 
 The extension auto-detects whether the input is a search query or a direct link.
@@ -91,12 +96,12 @@ This approach bypasses the `vscode-webview://` sandbox restrictions that block Y
 
 ## Troubleshooting
 
-| Symptom | Fix |
-|---|---|
-| "yt-dlp not found" | Install yt-dlp: `brew install yt-dlp` |
-| Video won't load / error from yt-dlp | Update yt-dlp: `yt-dlp -U` |
-| Search returns no results | Check your internet connection |
-| Video plays but no audio | The stream format may not include audio; try a different video to confirm |
+| Symptom                              | Fix                                                                       |
+| ------------------------------------ | ------------------------------------------------------------------------- |
+| "yt-dlp not found"                   | Install yt-dlp: `brew install yt-dlp`                                     |
+| Video won't load / error from yt-dlp | Update yt-dlp: `yt-dlp -U`                                                |
+| Search returns no results            | Check your internet connection                                            |
+| Video plays but no audio             | The stream format may not include audio; try a different video to confirm |
 
 ## Release Notes
 
