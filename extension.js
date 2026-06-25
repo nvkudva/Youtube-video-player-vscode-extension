@@ -1,5 +1,10 @@
-const vscode = require('vscode');
-const { getStreamUrl, searchYoutube, isVideoId, isYouTubeUrl } = require('./lib/utils');
+const vscode = require("vscode");
+const {
+  getStreamUrl,
+  searchYoutube,
+  isVideoId,
+  isYouTubeUrl,
+} = require("./lib/utils");
 
 /**
  * @param {vscode.ExtensionContext} context
@@ -120,12 +125,14 @@ class YouTubeViewProvider {
           videoId: msg.videoId,
         });
         try {
-          const url = await getStreamUrl(msg.videoId);
+          const { url, title: fetchedTitle } = await getStreamUrl(msg.videoId);
+          const title = msg.title || fetchedTitle;
           this.state.currentStreamUrl = url;
           webviewView.webview.postMessage({
             command: "videoReady",
             url,
             videoId: msg.videoId,
+            title,
           });
           if (this.state.floatingPanel) {
             this.state.floatingPanel.webview.html = getFloatingPlayerContent(
@@ -386,9 +393,9 @@ class YouTubeViewProvider {
     }
 
     /* ── play a video by ID ── */
-    function loadVideo(videoId) {
+    function loadVideo(videoId, title) {
         document.getElementById('action-btn').disabled = true;
-        vscode.postMessage({ command: 'loadVideo', videoId });
+        vscode.postMessage({ command: 'loadVideo', videoId, title: title || null });
     }
 
     /* ── search ── */
@@ -436,7 +443,7 @@ class YouTubeViewProvider {
             video.src = msg.url;
             video.style.display = 'block';
             video.play().catch(() => {});
-            addToHistory(msg.videoId);
+            addToHistory(msg.videoId, msg.title);
             clearResults();
             showHistory();
         }
@@ -502,18 +509,17 @@ class YouTubeViewProvider {
     }
 
     function onResultClick(videoId, title) {
-        // Put the title in the input so the user sees what's playing
         document.getElementById('url').value = title;
-        loadVideo(videoId);
+        loadVideo(videoId, title);
     }
 
     /* ── history ── */
-    function addToHistory(videoId) {
+    function addToHistory(videoId, title) {
         watchHistory = watchHistory.filter(v => v.id !== videoId);
         watchHistory.unshift({
             id: videoId,
             thumbnail: \`https://i.ytimg.com/vi/\${videoId}/mqdefault.jpg\`,
-            title: videoId
+            title: title || videoId
         });
         if (watchHistory.length > MAX_HISTORY) watchHistory.pop();
         try { localStorage.setItem('yt-history', JSON.stringify(watchHistory)); } catch (e) {}
