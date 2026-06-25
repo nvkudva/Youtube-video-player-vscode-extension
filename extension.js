@@ -1,32 +1,88 @@
 const vscode = require('vscode');
+const { spawn } = require('child_process');
+
+function ytdlp(args) {
+    return new Promise((resolve, reject) => {
+        const proc = spawn('yt-dlp', args);
+        let stdout = '', stderr = '';
+        proc.stdout.on('data', d => stdout += d.toString());
+        proc.stderr.on('data', d => stderr += d.toString());
+        proc.on('error', err => {
+            reject(err.code === 'ENOENT'
+                ? new Error('yt-dlp not found. Install it: brew install yt-dlp')
+                : err);
+        });
+        proc.on('close', code => {
+            if (code !== 0) reject(new Error(stderr.trim() || `yt-dlp exited ${code}`));
+            else resolve(stdout);
+        });
+    });
+}
+
+async function getStreamUrl(videoId) {
+    const out = await ytdlp([
+        '-f', '18/best[ext=mp4][height<=720]/best[ext=mp4]/best',
+        '--get-url', '--no-playlist',
+        `https://www.youtube.com/watch?v=${videoId}`
+    ]);
+    const urls = out.trim().split('\n').filter(l => l.startsWith('http'));
+    if (!urls.length) throw new Error('yt-dlp returned no stream URL');
+    return urls[0];
+}
+
+async function searchYoutube(query) {
+    const out = await ytdlp([
+        `ytsearch10:${query}`,
+        '--flat-playlist', '-j', '--no-playlist'
+    ]);
+    return out.trim().split('\n')
+        .filter(Boolean)
+        .map(line => {
+            try {
+                const r = JSON.parse(line);
+                return {
+                    id: r.id,
+                    title: r.title,
+                    channel: r.channel || r.uploader || '',
+                    duration: r.duration ? formatDuration(r.duration) : '',
+                    thumbnail: `https://i.ytimg.com/vi/${r.id}/mqdefault.jpg`
+                };
+            } catch { return null; }
+        })
+        .filter(Boolean);
+}
+
+function formatDuration(secs) {
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    const s = Math.floor(secs % 60);
+    if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+    return `${m}:${String(s).padStart(2,'0')}`;
+}
+
+function isVideoId(input) {
+    return /^[A-Za-z0-9_-]{11}$/.test(input.trim());
+}
+
+function isYouTubeUrl(input) {
+    return input.includes('youtube.com') || input.includes('youtu.be');
+}
 
 /**
  * @param {vscode.ExtensionContext} context
  */
 function activate(context) {
-    console.log('Congratulations, your extension "yt" is now active!');
-
-    // Create a shared state for the current video
-    const state = {
-        currentVideoId: null,
-        floatingPanel: null
-    };
-
-    // Make state accessible globally for deactivation
+    const state = { currentVideoId: null, currentStreamUrl: null, floatingPanel: null };
     global.state = state;
 
-    // Register the sidebar webview provider
     const provider = new YouTubeViewProvider(context.extensionUri, state);
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider('youtube-player', provider)
     );
 
-    // Add listener to close the floating player when all editors are closed
     context.subscriptions.push(
         vscode.window.onDidChangeVisibleTextEditors(editors => {
-            // Only act if there are no visible editors and we have a floating panel
             if (editors.length === 0 && state.floatingPanel) {
-                // Small delay to ensure we're not in the middle of switching editors
                 setTimeout(() => {
                     if (vscode.window.visibleTextEditors.length === 0 && state.floatingPanel) {
                         state.floatingPanel.dispose();
@@ -36,796 +92,492 @@ function activate(context) {
         })
     );
 
-    // Register the command to open the sidebar
-    const openSidebarCommand = vscode.commands.registerCommand('yt.openVideoPlayer', () => {
-        // Focus on the YouTube view in the sidebar
-        vscode.commands.executeCommand('youtube-player.focus');
-    });
+    context.subscriptions.push(
+        vscode.commands.registerCommand('yt.openVideoPlayer', () => {
+            vscode.commands.executeCommand('youtube-player.focus');
+        })
+    );
 
-    // Register the command to create a floating player
-    const floatingPlayerCommand = vscode.commands.registerCommand('yt.createFloatingPlayer', (videoId) => {
-        if (state.floatingPanel) {
-            // If panel exists, just reveal it
-            state.floatingPanel.reveal();
-
-            // If a new video ID was provided, update the player
-            if (videoId && videoId !== state.currentVideoId) {
-                state.currentVideoId = videoId;
-                updateFloatingPlayer(state);
+    context.subscriptions.push(
+        vscode.commands.registerCommand('yt.createFloatingPlayer', () => {
+            if (state.floatingPanel) {
+                state.floatingPanel.reveal(vscode.ViewColumn.Beside);
+                return;
             }
-        } else {
-            // Create a new floating panel
             const panel = vscode.window.createWebviewPanel(
-                'youtubeFloatingPlayer',
-                'YouTube Player',
-                {
-                    viewColumn: vscode.ViewColumn.Beside,
-                    preserveFocus: true
-                },
-                {
-                    enableScripts: true,
-                    retainContextWhenHidden: true,
-                    localResourceRoots: [vscode.Uri.file(context.extensionPath)]
-                }
+                'youtubeFloatingPlayer', 'YouTube Player',
+                vscode.ViewColumn.Beside,
+                { enableScripts: true }
             );
-
             state.floatingPanel = panel;
-            state.currentVideoId = videoId || state.currentVideoId;
-
-            // Set initial HTML content
-            panel.webview.html = getFloatingPlayerContent(state.currentVideoId);
-
-            // Handle panel disposal
-            panel.onDidDispose(() => {
-                state.floatingPanel = null;
+            panel.webview.html = getFloatingPlayerContent(state.currentStreamUrl, state.currentVideoId);
+            panel.onDidDispose(() => { state.floatingPanel = null; });
+            panel.webview.onDidReceiveMessage(msg => {
+                if (msg.command === 'minimize') panel.dispose();
             });
-
-            // Add listener to close the player when the editor is closed
-            const disposable = vscode.workspace.onDidCloseTextDocument(document => {
-                // Only check for text documents (not webviews)
-                if (document.uri.scheme === 'file' && vscode.window.visibleTextEditors.length === 0 && state.floatingPanel) {
-                    // Small delay to ensure we're not in the middle of switching editors
-                    setTimeout(() => {
-                        if (vscode.window.visibleTextEditors.length === 0 && state.floatingPanel) {
-                            state.floatingPanel.dispose();
-                        }
-                    }, 500);
-                }
-            });
-
-            // Add the disposable to context subscriptions
-            context.subscriptions.push(disposable);
-
-            // Handle messages from the webview
-            panel.webview.onDidReceiveMessage(message => {
-                switch (message.command) {
-                    case 'close':
-                        panel.dispose();
-                        break;
-
-                    case 'minimize':
-                        // This is a placeholder - VS Code doesn't have a built-in minimize function
-                        // We could hide and show the panel, but for now we'll just notify the user
-                        vscode.window.showInformationMessage('Minimize functionality is not available in VS Code webviews.');
-                        break;
-
-                    case 'drag':
-                        // VS Code doesn't support direct dragging of webview panels
-                        // We could implement a custom solution with multiple panels, but it's complex
-                        // For now, we'll just notify the user
-                        vscode.window.showInformationMessage('Dragging is not fully supported in VS Code webviews. You can use the built-in editor grid to arrange panels.');
-                        break;
-
-                    case 'keepAlive':
-                        // Do nothing, this is just to keep the connection alive
-                        // when the tab is not focused
-                        break;
-
-                    case 'resize':
-                        // Similar to dragging, direct resizing is not supported
-                        // We'll notify the user
-                        vscode.window.showInformationMessage('Custom resizing is not fully supported in VS Code webviews. You can resize the panel using the editor grid handles.');
-                        break;
-                }
-            });
-        }
-    });
-
-    context.subscriptions.push(openSidebarCommand, floatingPlayerCommand);
+        })
+    );
 }
 
-/**
- * Update the floating player with new content
- */
-function updateFloatingPlayer(state) {
-    if (state.floatingPanel) {
-        state.floatingPanel.webview.html = getFloatingPlayerContent(state.currentVideoId);
-    }
-}
-
-/**
- * Get the HTML content for the floating player
- */
-function getFloatingPlayerContent(videoId) {
+function getFloatingPlayerContent(streamUrl, videoId) {
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>YouTube Floating Player</title>
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; frame-src https://www.youtube.com https://www.youtube-nocookie.com; img-src https://i.ytimg.com https://img.youtube.com data:; script-src 'unsafe-inline'; style-src 'unsafe-inline';" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; media-src https:; script-src 'unsafe-inline'; style-src 'unsafe-inline';">
     <style>
-        :root {
-            --vscode-bg: var(--vscode-editor-background, #1e1e1e);
-            --vscode-fg: var(--vscode-editor-foreground, #d4d4d4);
-            --vscode-button-bg: var(--vscode-button-background, #0e639c);
-            --vscode-button-hover-bg: var(--vscode-button-hoverBackground, #1177bb);
-            --vscode-button-fg: var(--vscode-button-foreground, white);
-            --vscode-panel-border: var(--vscode-panel-border, #80808059);
-        }
-        
-        body {
-            background-color: var(--vscode-bg);
-            color: var(--vscode-fg);
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
-            margin: 0;
-            padding: 0;
-            overflow: hidden;
-            height: 100vh;
-            display: flex;
-            flex-direction: column;
-        }
-        
-        .header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 5px 10px;
-            background-color: rgba(0, 0, 0, 0.3);
-            cursor: move;
-            user-select: none;
-        }
-        
-        .title {
-            font-size: 12px;
-            font-weight: 500;
-        }
-        
-        .controls {
-            display: flex;
-            gap: 5px;
-        }
-        
-        .control-button {
-            background: transparent;
-            border: none;
-            color: var(--vscode-fg);
-            cursor: pointer;
-            font-size: 14px;
-            padding: 2px 5px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-        
-        .control-button:hover {
-            background-color: rgba(255, 255, 255, 0.1);
-        }
-        
-        .video-container {
-            flex: 1;
-            position: relative;
-            width: 100%;
-            background-color: #000;
-        }
-        
-        .video-container iframe {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            border: none;
-        }
-        
-        .resize-handle {
-            position: absolute;
-            bottom: 0;
-            right: 0;
-            width: 15px;
-            height: 15px;
-            cursor: nwse-resize;
-            background: transparent;
-        }
-        
-        .resize-handle::after {
-            content: '';
-            position: absolute;
-            right: 3px;
-            bottom: 3px;
-            width: 5px;
-            height: 5px;
-            border-right: 2px solid rgba(255, 255, 255, 0.5);
-            border-bottom: 2px solid rgba(255, 255, 255, 0.5);
-        }
+        body { margin:0; background:#000; display:flex; flex-direction:column; height:100vh; color:#d4d4d4; font-family:sans-serif; }
+        .toolbar { background:#1e1e1e; padding:5px 10px; display:flex; align-items:center; gap:8px; font-size:12px; }
+        button { background:#0e639c; color:white; border:none; padding:4px 10px; border-radius:3px; cursor:pointer; font-size:12px; }
+        button:hover { background:#1177bb; }
+        .video-wrap { flex:1; display:flex; align-items:center; justify-content:center; background:#000; }
+        video { max-width:100%; max-height:100%; width:100%; }
+        .placeholder { color:#666; font-size:14px; text-align:center; padding:20px; }
     </style>
 </head>
 <body>
-    <div class="header" id="drag-handle">
-        <div class="title">YouTube Player</div>
-        <div class="controls">
-            <button class="control-button" id="minimize-btn" title="Minimize">−</button>
-            <button class="control-button" id="close-btn" title="Close">×</button>
-        </div>
+    <div class="toolbar">
+        <span style="opacity:0.7;flex:1">${videoId ? `Video: ${videoId}` : 'No video loaded'}</span>
+        <button onclick="(acquireVsCodeApi)().postMessage({command:'minimize'})">Close</button>
     </div>
-    
-    <div class="video-container">
-        ${videoId ? `
-        <iframe
-            id="youtube-player"
-            src="https://www.youtube.com/embed/${videoId}?autoplay=1&modestbranding=1&rel=0&enablejsapi=1&playsinline=1"
-            frameborder="0"
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-            allowfullscreen>
-        </iframe>
-        ` : '<div style="padding: 20px; text-align: center;">No video selected</div>'}
+    <div class="video-wrap">
+        ${streamUrl
+            ? `<video src="${streamUrl}" controls autoplay></video>`
+            : `<div class="placeholder">Load a video from the sidebar player first</div>`}
     </div>
-    
-    <div class="resize-handle" id="resize-handle"></div>
-
-    <script>
-        // Make the window draggable
-        const dragHandle = document.getElementById('drag-handle');
-        
-        dragHandle.addEventListener('mousedown', (e) => {
-            e.preventDefault();
-            
-            // Send message to VS Code to start dragging
-            const message = {
-                command: 'drag',
-                mouseX: e.clientX,
-                mouseY: e.clientY
-            };
-            
-            // Use window.parent.postMessage for VS Code webview communication
-            window.parent.postMessage(message, '*');
-        });
-        
-        // Keep the connection alive with periodic messages
-        setInterval(() => {
-            window.parent.postMessage({ command: 'keepAlive' }, '*');
-        }, 5000);
-        
-        // Handle close button
-        document.getElementById('close-btn').addEventListener('click', () => {
-            window.parent.postMessage({ command: 'close' }, '*');
-        });
-        
-        // Handle minimize button
-        document.getElementById('minimize-btn').addEventListener('click', () => {
-            window.parent.postMessage({ command: 'minimize' }, '*');
-        });
-        
-        // Handle resize
-        const resizeHandle = document.getElementById('resize-handle');
-        
-        resizeHandle.addEventListener('mousedown', (e) => {
-            e.preventDefault();
-            
-            // Send message to VS Code to start resizing
-            const message = {
-                command: 'resize',
-                mouseX: e.clientX,
-                mouseY: e.clientY
-            };
-            
-            window.parent.postMessage(message, '*');
-        });
-        
-        // Prevent default behavior for mousedown on the iframe to avoid issues
-        document.querySelector('.video-container').addEventListener('mousedown', (e) => {
-            e.stopPropagation();
-        });
-    </script>
 </body>
 </html>`;
 }
 
-/**
- * YouTube Sidebar View Provider
- */
 class YouTubeViewProvider {
     constructor(extensionUri, state) {
         this.extensionUri = extensionUri;
         this.state = state;
     }
 
+    /** @param {vscode.WebviewView} webviewView */
     resolveWebviewView(webviewView) {
-        this.webviewView = webviewView;
+        webviewView.webview.options = { enableScripts: true, localResourceRoots: [this.extensionUri] };
+        webviewView.webview.html = this._getHtml();
 
-        // Set webview options
-        webviewView.webview.options = {
-            enableScripts: true,
-            localResourceRoots: [this.extensionUri]
-        };
-
-        // Set the HTML content
-        webviewView.webview.html = this.getWebviewContent();
-
-        // Handle messages from the webview
-        webviewView.webview.onDidReceiveMessage(message => {
-            switch (message.command) {
-                case 'loadVideo':
-                    this.state.currentVideoId = message.videoId;
-                    updateFloatingPlayer(this.state);
-                    break;
-
-                case 'popOut':
-                    vscode.commands.executeCommand('yt.createFloatingPlayer', message.videoId);
-                    break;
-
-                case 'keepAlive':
-                    // Do nothing, this is just to keep the connection alive
-                    break;
+        webviewView.webview.onDidReceiveMessage(async msg => {
+            if (msg.command === 'loadVideo') {
+                this.state.currentVideoId = msg.videoId;
+                webviewView.webview.postMessage({ command: 'loading', videoId: msg.videoId });
+                try {
+                    const url = await getStreamUrl(msg.videoId);
+                    this.state.currentStreamUrl = url;
+                    webviewView.webview.postMessage({ command: 'videoReady', url, videoId: msg.videoId });
+                    if (this.state.floatingPanel) {
+                        this.state.floatingPanel.webview.html = getFloatingPlayerContent(url, msg.videoId);
+                    }
+                } catch (err) {
+                    webviewView.webview.postMessage({ command: 'videoError', error: err.message });
+                }
+            } else if (msg.command === 'search') {
+                webviewView.webview.postMessage({ command: 'searching' });
+                try {
+                    const results = await searchYoutube(msg.query);
+                    webviewView.webview.postMessage({ command: 'searchResults', results });
+                } catch (err) {
+                    webviewView.webview.postMessage({ command: 'searchError', error: err.message });
+                }
+            } else if (msg.command === 'popOut') {
+                vscode.commands.executeCommand('yt.createFloatingPlayer');
             }
         });
     }
 
-    getWebviewContent() {
+    _getHtml() {
         return `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>YouTube Player</title>
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; frame-src https://www.youtube.com https://www.youtube-nocookie.com; img-src https://i.ytimg.com https://img.youtube.com data:; script-src 'unsafe-inline'; style-src 'unsafe-inline';" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; media-src https:; img-src https://i.ytimg.com; script-src 'unsafe-inline'; style-src 'unsafe-inline';">
     <style>
-        :root {
-            --vscode-bg: var(--vscode-sideBar-background, #1e1e1e);
-            --vscode-fg: var(--vscode-sideBar-foreground, #d4d4d4);
-            --vscode-input-bg: var(--vscode-input-background, #3c3c3c);
-            --vscode-button-bg: var(--vscode-button-background, #0e639c);
-            --vscode-button-hover-bg: var(--vscode-button-hoverBackground, #1177bb);
-            --vscode-button-fg: var(--vscode-button-foreground, white);
-            --vscode-focus-border: var(--vscode-focusBorder, #007fd4);
-            --vscode-panel-border: var(--vscode-panel-border, #80808059);
-            --vscode-error-color: var(--vscode-errorForeground, #f48771);
-            --container-padding: 10px;
-            --input-height: 28px;
-        }
-        
+        * { box-sizing:border-box; margin:0; padding:0; }
         body {
-            background-color: var(--vscode-bg);
-            color: var(--vscode-fg);
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
-            padding: var(--container-padding);
-            margin: 0;
-            line-height: 1.5;
-            font-size: 13px;
+            background:var(--vscode-sideBar-background,#1e1e1e);
+            color:var(--vscode-foreground,#d4d4d4);
+            font-family:var(--vscode-font-family,sans-serif);
+            font-size:13px;
+            height:100vh;
+            display:flex;
+            flex-direction:column;
+            overflow:hidden;
         }
-        
-        .container {
-            width: 100%;
+        .container { display:flex; flex-direction:column; height:100%; gap:8px; padding:8px; overflow:hidden; }
+
+        /* ── input row ── */
+        .input-row { display:flex; gap:6px; flex-shrink:0; }
+        .url-input {
+            flex:1;
+            background:var(--vscode-input-background,#3c3c3c);
+            color:var(--vscode-input-foreground,#d4d4d4);
+            border:1px solid var(--vscode-input-border,#555);
+            border-radius:3px;
+            padding:5px 8px;
+            font-size:12px;
+            outline:none;
         }
-        
-        h1 {
-            font-size: 1.2rem;
-            margin-bottom: 0.8rem;
-            border-bottom: 1px solid var(--vscode-panel-border);
-            padding-bottom: 0.5rem;
+        .url-input:focus { border-color:var(--vscode-focusBorder,#007fd4); }
+        .btn {
+            background:var(--vscode-button-background,#0e639c);
+            color:var(--vscode-button-foreground,white);
+            border:none; border-radius:3px;
+            padding:5px 10px; cursor:pointer; font-size:12px; white-space:nowrap;
         }
-        
-        .input-group {
-            display: flex;
-            margin-bottom: 0.8rem;
-            gap: 6px;
+        .btn:hover { background:var(--vscode-button-hoverBackground,#1177bb); }
+        .btn:disabled { opacity:0.5; cursor:default; }
+
+        /* ── alerts ── */
+        .error-msg {
+            display:none; flex-shrink:0;
+            color:#f48771; background:rgba(255,100,100,0.1);
+            border:1px solid #f48771; border-radius:3px;
+            padding:6px 8px; font-size:11px; line-height:1.4; word-break:break-word;
         }
-        
-        input[type="text"] {
-            flex: 1;
-            background-color: var(--vscode-input-bg);
-            border: 1px solid transparent;
-            color: var(--vscode-fg);
-            padding: 0 8px;
-            height: var(--input-height);
-            border-radius: 2px;
-            outline: none;
-            font-size: 13px;
-        }
-        
-        input[type="text"]:focus {
-            border-color: var(--vscode-focus-border);
-        }
-        
-        button {
-            background-color: var(--vscode-button-bg);
-            color: var(--vscode-button-fg);
-            border: none;
-            padding: 0 8px;
-            height: var(--input-height);
-            border-radius: 2px;
-            cursor: pointer;
-            font-size: 13px;
-            font-weight: 500;
-            transition: background-color 0.2s;
-        }
-        
-        button:hover {
-            background-color: var(--vscode-button-hover-bg);
-        }
-        
+
+        /* ── video area ── */
         .video-container {
-            position: relative;
-            width: 100%;
-            padding-top: 56.25%; /* 16:9 Aspect Ratio */
-            margin-top: 0.8rem;
-            background-color: #000;
-            border-radius: 2px;
-            overflow: hidden;
+            position:relative; width:100%; aspect-ratio:16/9;
+            background:#000; border-radius:4px; overflow:hidden; flex-shrink:0;
         }
-        
-        .video-container iframe {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            border: none;
-        }
-        
+        video { width:100%; height:100%; display:none; }
         .placeholder {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            background-color: rgba(0, 0, 0, 0.7);
-            color: #fff;
+            position:absolute; inset:0;
+            display:flex; flex-direction:column; align-items:center; justify-content:center;
+            gap:8px; color:#555;
         }
-        
-        .placeholder svg {
-            width: 48px;
-            height: 48px;
-            margin-bottom: 12px;
-            fill: #ff0000;
+        .placeholder svg { width:40px; height:40px; fill:currentColor; }
+        .placeholder-text { font-size:11px; }
+        .spinner-overlay {
+            display:none; position:absolute; inset:0;
+            align-items:center; justify-content:center;
+            background:rgba(0,0,0,0.65); flex-direction:column; gap:8px;
+            color:white; font-size:12px;
         }
-        
-        .placeholder-text {
-            font-size: 12px;
-            text-align: center;
-            padding: 0 10px;
+        .spinner {
+            width:26px; height:26px;
+            border:3px solid rgba(255,255,255,0.2); border-top-color:#fff;
+            border-radius:50%; animation:spin 0.8s linear infinite;
         }
-        
-        .error-message {
-            color: var(--vscode-error-color);
-            margin-top: 0.5rem;
-            font-size: 12px;
-            display: none;
+        @keyframes spin { to { transform:rotate(360deg); } }
+
+        /* ── action buttons ── */
+        .action-row { display:flex; gap:6px; flex-shrink:0; }
+
+        /* ── search results ── */
+        #results-section {
+            display:none; flex-direction:column; gap:6px;
+            overflow-y:auto; flex:1;
         }
-        
-        .history {
-            margin-top: 1.5rem;
+        .results-heading {
+            font-size:10px; text-transform:uppercase; opacity:0.45;
+            letter-spacing:0.06em; flex-shrink:0;
         }
-        
-        .history h2 {
-            font-size: 0.9rem;
-            margin-bottom: 0.5rem;
+        .results-list { list-style:none; display:flex; flex-direction:column; gap:3px; }
+        .result-item {
+            display:flex; align-items:flex-start; gap:8px;
+            cursor:pointer; padding:5px; border-radius:3px;
         }
-        
-        .history-list {
-            list-style: none;
-            padding: 0;
-            margin: 0;
-            max-height: 200px;
-            overflow-y: auto;
-            border: 1px solid var(--vscode-panel-border);
-            border-radius: 2px;
+        .result-item:hover { background:rgba(255,255,255,0.07); }
+        .result-item img {
+            width:72px; height:40px; object-fit:cover;
+            border-radius:2px; flex-shrink:0; background:#333;
         }
-        
+        .result-info { overflow:hidden; flex:1; }
+        .result-title { font-size:11px; line-height:1.3; margin-bottom:2px; }
+        .result-meta { font-size:10px; opacity:0.5; display:flex; gap:6px; }
+
+        /* ── history ── */
+        #history-section {
+            display:none; flex-direction:column; gap:6px;
+            overflow-y:auto; flex:1;
+        }
+        .history-heading { font-size:10px; text-transform:uppercase; opacity:0.45; letter-spacing:0.06em; }
+        .history-list { list-style:none; display:flex; flex-direction:column; gap:3px; }
         .history-item {
-            padding: 6px 8px;
-            cursor: pointer;
-            border-bottom: 1px solid var(--vscode-panel-border);
-            display: flex;
-            align-items: center;
+            display:flex; align-items:center; gap:8px;
+            cursor:pointer; padding:4px; border-radius:3px;
         }
-        
-        .history-item:last-child {
-            border-bottom: none;
+        .history-item:hover { background:rgba(255,255,255,0.07); }
+        .history-item img { width:60px; height:34px; object-fit:cover; border-radius:2px; flex-shrink:0; }
+        .history-item-info { overflow:hidden; }
+        .history-item-title { font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .history-item-id { font-size:10px; opacity:0.45; }
+
+        /* searching spinner */
+        .searching-row {
+            display:none; align-items:center; gap:8px;
+            font-size:11px; opacity:0.65; padding:4px 0; flex-shrink:0;
         }
-        
-        .history-item:hover {
-            background-color: rgba(255, 255, 255, 0.1);
-        }
-        
-        .history-item img {
-            width: 80px;
-            height: 45px;
-            margin-right: 8px;
-            border-radius: 2px;
-        }
-        
-        .history-item-info {
-            flex: 1;
-            min-width: 0; /* Allows text truncation to work */
-        }
-        
-        .history-item-title {
-            font-weight: 500;
-            margin-bottom: 2px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            font-size: 12px;
-        }
-        
-        .history-item-id {
-            font-size: 11px;
-            color: rgba(255, 255, 255, 0.6);
-        }
-        
-        .action-buttons {
-            display: flex;
-            justify-content: flex-end;
-            margin-top: 8px;
-            gap: 6px;
-        }
-        
-        .icon-button {
-            display: flex;
-            align-items: center;
-            gap: 4px;
-            font-size: 12px;
-        }
-        
-        .icon-button svg {
-            width: 14px;
-            height: 14px;
-            fill: currentColor;
+        .mini-spinner {
+            width:14px; height:14px;
+            border:2px solid rgba(255,255,255,0.2); border-top-color:#fff;
+            border-radius:50%; animation:spin 0.8s linear infinite; flex-shrink:0;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>YouTube Player</h1>
-        
-        <div class="input-group">
-            <input type="text" id="url" placeholder="Enter YouTube URL or video ID" autofocus>
-            <button onclick="handleClick()">Load</button>
-        </div>
-        
-        <div id="error-message" class="error-message"></div>
-        
-        <div class="video-container">
-    <div id="output"></div>
-            <div id="placeholder" class="placeholder">
-                <svg viewBox="0 0 24 24">
-                    <path d="M10,15L15.19,12L10,9V15M21.56,7.17C21.69,7.64 21.78,8.27 21.84,9.07C21.91,9.87 21.94,10.56 21.94,11.16L22,12C22,14.19 21.84,15.8 21.56,16.83C21.31,17.73 20.73,18.31 19.83,18.56C19.36,18.69 18.5,18.78 17.18,18.84C15.88,18.91 14.69,18.94 13.59,18.94L12,19C7.81,19 5.2,18.84 4.17,18.56C3.27,18.31 2.69,17.73 2.44,16.83C2.31,16.36 2.22,15.73 2.16,14.93C2.09,14.13 2.06,13.44 2.06,12.84L2,12C2,9.81 2.16,8.2 2.44,7.17C2.69,6.27 3.27,5.69 4.17,5.44C4.64,5.31 5.5,5.22 6.82,5.16C8.12,5.09 9.31,5.06 10.41,5.06L12,5C16.19,5 18.8,5.16 19.83,5.44C20.73,5.69 21.31,6.27 21.56,7.17Z" />
-                </svg>
-                <div class="placeholder-text">Enter a YouTube URL to start watching</div>
-            </div>
-        </div>
-        
-        <div class="action-buttons">
-            <button id="pop-out-btn" class="icon-button" title="Pop out player" onclick="popOutPlayer()">
-                <svg viewBox="0 0 24 24">
-                    <path d="M19,19H5V5H19M19,3H5A2,2 0 0,0 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5A2,2 0 0,0 19,3M13.96,12.29L11.21,15.83L9.25,13.47L6.5,17H17.5L13.96,12.29Z" />
-                </svg>
-                Pop Out
-            </button>
-        </div>
-        
-        <div class="history" id="history-container">
-            <h2>Recently Watched</h2>
-            <ul class="history-list" id="history-list"></ul>
-        </div>
+<div class="container">
+    <div class="input-row">
+        <input class="url-input" id="url" type="text"
+               placeholder="Search or paste YouTube URL / ID"
+               onkeydown="if(event.key==='Enter') handleInput()">
+        <button class="btn" id="action-btn" onclick="handleInput()">Go</button>
     </div>
 
-    <script>
-        // Store watch history in memory
-        let watchHistory = [];
-        const MAX_HISTORY = 5;
-        let currentVideoId = null;
-        
-        // Create a function to communicate with the extension
-        const vscode = acquireVsCodeApi();
-        
-        // Try to load history from localStorage if available
+    <div id="error-msg" class="error-msg"></div>
+
+    <div class="video-container">
+        <div id="placeholder" class="placeholder">
+            <svg viewBox="0 0 24 24">
+                <path d="M10,15L15.19,12L10,9V15M21.56,7.17C21.69,7.64 21.78,8.27 21.84,9.07C21.91,9.87 21.94,10.56 21.94,11.16L22,12C22,14.19 21.84,15.8 21.56,16.83C21.31,17.73 20.73,18.31 19.83,18.56C19.36,18.69 18.5,18.78 17.18,18.84C15.88,18.91 14.69,18.94 13.59,18.94L12,19C7.81,19 5.2,18.84 4.17,18.56C3.27,18.31 2.69,17.73 2.44,16.83C2.31,16.36 2.22,15.73 2.16,14.93C2.09,14.13 2.06,13.44 2.06,12.84L2,12C2,9.81 2.16,8.2 2.44,7.17C2.69,6.27 3.27,5.69 4.17,5.44C4.64,5.31 5.5,5.22 6.82,5.16C8.12,5.09 9.31,5.06 10.41,5.06L12,5C16.19,5 18.8,5.16 19.83,5.44C20.73,5.69 21.31,6.27 21.56,7.17Z"/>
+            </svg>
+            <div class="placeholder-text">Search or paste a YouTube URL</div>
+        </div>
+        <div id="video-spinner" class="spinner-overlay">
+            <div class="spinner"></div>
+            <span>Fetching stream…</span>
+        </div>
+        <video id="player" controls></video>
+    </div>
+
+    <div class="action-row">
+        <button class="btn" onclick="popOut()">
+            <svg style="width:11px;height:11px;vertical-align:middle;fill:currentColor;margin-right:3px" viewBox="0 0 24 24">
+                <path d="M19,19H5V5H19M19,3H5A2,2 0 0,0 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5A2,2 0 0,0 19,3M13.96,12.29L11.21,15.83L9.25,13.47L6.5,17H17.5L13.96,12.29Z"/>
+            </svg>
+            Pop Out
+        </button>
+    </div>
+
+    <div id="searching-row" class="searching-row">
+        <div class="mini-spinner"></div>
+        <span>Searching YouTube…</span>
+    </div>
+
+    <!-- search results -->
+    <div id="results-section">
+        <div class="results-heading">Search Results</div>
+        <ul class="results-list" id="results-list"></ul>
+    </div>
+
+    <!-- watch history (shown when no search results) -->
+    <div id="history-section">
+        <div class="history-heading">Recently Watched</div>
+        <ul class="history-list" id="history-list"></ul>
+    </div>
+</div>
+
+<script>
+    const vscode = acquireVsCodeApi();
+    const MAX_HISTORY = 5;
+    let watchHistory = [];
+
+    try {
+        const saved = localStorage.getItem('yt-history');
+        if (saved) { watchHistory = JSON.parse(saved); renderHistory(); }
+    } catch (e) {}
+
+    /* ── input detection ── */
+    function isYouTubeUrl(s) { return s.includes('youtube.com') || s.includes('youtu.be'); }
+    function isVideoId(s) { return /^[A-Za-z0-9_-]{11}$/.test(s.trim()); }
+
+    function extractVideoId(input) {
         try {
-            const savedHistory = localStorage.getItem('youtube-history');
-            if (savedHistory) {
-                watchHistory = JSON.parse(savedHistory);
-                updateHistoryUI();
-            }
-        } catch (e) {
-            console.error('Failed to load history:', e);
-        }
-        
-        function handleClick() {
-            let url = document.querySelector("#url").value.trim();
-            loadVideo(url);
-        }
-        
-        function loadVideo(url) {
-            try {
-                // Clear previous error message
-                const errorElement = document.getElementById("error-message");
-                errorElement.style.display = "none";
-                errorElement.textContent = "";
-                
-                // Extract video ID from URL or use as direct ID
-                let videoId;
-                
-                if (url.includes("youtube.com") || url.includes("youtu.be")) {
-                    // Handle youtube.com URLs
-                    if (url.includes("youtube.com")) {
-                        videoId = new URL(url).searchParams.get("v");
-                    } 
-                    // Handle youtu.be URLs
-                    else if (url.includes("youtu.be")) {
-                        videoId = url.split("/").pop().split("?")[0];
-                    }
-                } else {
-                    // Assume it's a direct video ID
-                    videoId = url;
-                }
-                
-                if (!videoId) {
-                    showError("Could not extract video ID from URL");
-                    return;
-                }
+            if (input.includes('youtube.com')) return new URL(input).searchParams.get('v');
+            if (input.includes('youtu.be')) return input.split('/').pop().split('?')[0];
+        } catch (e) {}
+        return input.trim();
+    }
 
-                // Store the current video ID
-                currentVideoId = videoId;
-                
-                // Notify the extension about the video change
-                vscode.postMessage({
-                    command: 'loadVideo',
-                    videoId: videoId
-                });
+    function handleInput() {
+        const raw = document.getElementById('url').value.trim();
+        if (!raw) return;
+        hideError();
 
-                // Create embed URL - use modest branding and smaller controls for sidebar
-                let embedUrl = \`https://www.youtube.com/embed/\${videoId}?autoplay=1&modestbranding=1&rel=0\`;
-                let embedCode = \`
-                    <iframe
-                        src="\${embedUrl}"
-                        frameborder="0"
-                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                        allowfullscreen>
-                    </iframe>
-                \`;
+        if (isYouTubeUrl(raw) || isVideoId(raw)) {
+            const videoId = extractVideoId(raw);
+            if (!videoId) { showError('Could not extract a video ID from that URL.'); return; }
+            clearResults();
+            loadVideo(videoId);
+        } else {
+            doSearch(raw);
+        }
+    }
 
-                // Update the output and hide placeholder
-                document.querySelector("#output").innerHTML = embedCode;
-                document.querySelector("#placeholder").style.display = "none";
-                
-                // Add to watch history
-                addToHistory(videoId);
-            } catch (error) {
-                showError("Please enter a valid YouTube URL or video ID");
-                console.error(error);
-            }
+    /* ── play a video by ID ── */
+    function loadVideo(videoId) {
+        document.getElementById('action-btn').disabled = true;
+        vscode.postMessage({ command: 'loadVideo', videoId });
+    }
+
+    /* ── search ── */
+    function doSearch(query) {
+        document.getElementById('action-btn').disabled = true;
+        vscode.postMessage({ command: 'search', query });
+    }
+
+    function clearResults() {
+        document.getElementById('results-section').style.display = 'none';
+        document.getElementById('results-list').innerHTML = '';
+    }
+
+    /* ── pop out ── */
+    function popOut() { vscode.postMessage({ command: 'popOut' }); }
+
+    /* ── UI helpers ── */
+    function showError(msg) {
+        const el = document.getElementById('error-msg');
+        el.textContent = msg;
+        el.style.display = 'block';
+        document.getElementById('action-btn').disabled = false;
+    }
+    function hideError() { document.getElementById('error-msg').style.display = 'none'; }
+    function setVideoSpinner(show) {
+        document.getElementById('video-spinner').style.display = show ? 'flex' : 'none';
+    }
+    function setSearchSpinner(show) {
+        document.getElementById('searching-row').style.display = show ? 'flex' : 'none';
+    }
+
+    /* ── messages from extension host ── */
+    window.addEventListener('message', event => {
+        const msg = event.data;
+
+        if (msg.command === 'loading') {
+            setVideoSpinner(true);
+            document.getElementById('placeholder').style.display = 'none';
         }
-        
-        function popOutPlayer() {
-            if (!currentVideoId) {
-                showError("Please load a video first");
-                return;
-            }
-            
-            // Send message to create floating player
-            vscode.postMessage({
-                command: 'popOut',
-                videoId: currentVideoId
-            });
+
+        if (msg.command === 'videoReady') {
+            setVideoSpinner(false);
+            document.getElementById('action-btn').disabled = false;
+            const video = document.getElementById('player');
+            video.src = msg.url;
+            video.style.display = 'block';
+            video.play().catch(() => {});
+            addToHistory(msg.videoId);
+            clearResults();
+            showHistory();
         }
-        
-        function showError(message) {
-            const errorElement = document.getElementById("error-message");
-            errorElement.textContent = message;
-            errorElement.style.display = "block";
+
+        if (msg.command === 'videoError') {
+            setVideoSpinner(false);
+            document.getElementById('placeholder').style.display = 'flex';
+            showError('Playback error: ' + msg.error);
         }
-        
-        function addToHistory(videoId) {
-            // Check if already in history
-            const existingIndex = watchHistory.findIndex(item => item.id === videoId);
-            if (existingIndex !== -1) {
-                // Move to top if already exists
-                const item = watchHistory.splice(existingIndex, 1)[0];
-                watchHistory.unshift(item);
-            } else {
-                // Fetch video title and thumbnail (in a real extension, you'd use the YouTube API)
-                // For now, we'll just use the video ID as the title
-                watchHistory.unshift({
-                    id: videoId,
-                    title: "Video " + videoId,
-                    thumbnail: \`https://i.ytimg.com/vi/\${videoId}/mqdefault.jpg\`
-                });
-                
-                // Limit history size
-                if (watchHistory.length > MAX_HISTORY) {
-                    watchHistory.pop();
-                }
-            }
-            
-            // Update history UI
-            updateHistoryUI();
-            
-            // Try to save to localStorage if available
-            try {
-                localStorage.setItem('youtube-history', JSON.stringify(watchHistory));
-            } catch (e) {
-                console.error('Failed to save history:', e);
-            }
+
+        if (msg.command === 'searching') {
+            setSearchSpinner(true);
+            clearResults();
+            document.getElementById('history-section').style.display = 'none';
         }
-        
-        function updateHistoryUI() {
-            const historyList = document.getElementById("history-list");
-            historyList.innerHTML = "";
-            
-            watchHistory.forEach(video => {
-                const item = document.createElement("li");
-                item.className = "history-item";
-                item.onclick = () => {
-                    document.querySelector("#url").value = video.id;
-                    loadVideo(video.id);
-                };
-                
-                item.innerHTML = \`
-                    <img src="\${video.thumbnail}" alt="\${video.title}">
-                    <div class="history-item-info">
-                        <div class="history-item-title">\${video.title}</div>
-                        <div class="history-item-id">\${video.id}</div>
+
+        if (msg.command === 'searchResults') {
+            setSearchSpinner(false);
+            document.getElementById('action-btn').disabled = false;
+            renderResults(msg.results);
+        }
+
+        if (msg.command === 'searchError') {
+            setSearchSpinner(false);
+            document.getElementById('action-btn').disabled = false;
+            showError('Search error: ' + msg.error);
+        }
+    });
+
+    /* ── render search results ── */
+    function renderResults(results) {
+        const section = document.getElementById('results-section');
+        const list = document.getElementById('results-list');
+
+        if (!results || results.length === 0) {
+            showError('No results found.');
+            return;
+        }
+
+        list.innerHTML = results.map(r => \`
+            <li class="result-item" data-id="\${escHtml(r.id)}" data-title="\${escHtml(r.title)}">
+                <img src="\${r.thumbnail}" alt="" loading="lazy">
+                <div class="result-info">
+                    <div class="result-title">\${escHtml(r.title)}</div>
+                    <div class="result-meta">
+                        \${r.channel ? '<span>' + escHtml(r.channel) + '</span>' : ''}
+                        \${r.duration ? '<span>' + escHtml(r.duration) + '</span>' : ''}
                     </div>
-                \`;
-                
-                historyList.appendChild(item);
-            });
-            
-            // Show/hide history container based on whether we have items
-            document.getElementById("history-container").style.display = 
-                watchHistory.length > 0 ? "block" : "none";
-        }
-        
-        // Initialize
-        document.getElementById("history-container").style.display = 
-            watchHistory.length > 0 ? "block" : "none";
-        
-        // Handle Enter key in the input field
-        document.querySelector("#url").addEventListener("keyup", function(event) {
-            if (event.key === "Enter") {
-                handleClick();
-            }
+                </div>
+            </li>
+        \`).join('');
+
+        list.onclick = e => {
+            const item = e.target.closest('.result-item');
+            if (item) onResultClick(item.dataset.id, item.dataset.title);
+        };
+
+        section.style.display = 'flex';
+    }
+
+    function escHtml(s) {
+        return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    function onResultClick(videoId, title) {
+        // Put the title in the input so the user sees what's playing
+        document.getElementById('url').value = title;
+        loadVideo(videoId);
+    }
+
+    /* ── history ── */
+    function addToHistory(videoId) {
+        watchHistory = watchHistory.filter(v => v.id !== videoId);
+        watchHistory.unshift({
+            id: videoId,
+            thumbnail: \`https://i.ytimg.com/vi/\${videoId}/mqdefault.jpg\`,
+            title: videoId
         });
-        
-        // Keep the connection alive with periodic messages
-        setInterval(() => {
-            window.parent.postMessage({ command: 'keepAlive' }, '*');
-        }, 5000);
-    </script>
+        if (watchHistory.length > MAX_HISTORY) watchHistory.pop();
+        try { localStorage.setItem('yt-history', JSON.stringify(watchHistory)); } catch (e) {}
+    }
+
+    function showHistory() {
+        renderHistory();
+        document.getElementById('history-section').style.display =
+            watchHistory.length > 0 ? 'flex' : 'none';
+    }
+
+    function renderHistory() {
+        const list = document.getElementById('history-list');
+        list.innerHTML = watchHistory.map(v => \`
+            <li class="history-item" onclick="loadVideo('\${v.id}')">
+                <img src="\${v.thumbnail}" alt="" loading="lazy">
+                <div class="history-item-info">
+                    <div class="history-item-title">\${escHtml(v.title)}</div>
+                    <div class="history-item-id">\${v.id}</div>
+                </div>
+            </li>
+        \`).join('');
+        if (watchHistory.length > 0) {
+            document.getElementById('history-section').style.display = 'flex';
+        }
+    }
+
+    // show history on load
+    showHistory();
+</script>
 </body>
 </html>`;
     }
 }
 
 function deactivate() {
-    // Close any open floating panels when the extension is deactivated
-    try {
-        if (global.state && global.state.floatingPanel) {
-            global.state.floatingPanel.dispose();
-            global.state.floatingPanel = null;
-        }
-    } catch (error) {
-        console.error('Error during deactivation:', error);
+    if (global.state && global.state.floatingPanel) {
+        global.state.floatingPanel.dispose();
     }
 }
 
-module.exports = {
-    activate,
-    deactivate
-};
-
+module.exports = { activate, deactivate };
