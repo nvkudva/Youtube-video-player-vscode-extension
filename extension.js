@@ -606,7 +606,7 @@ class YouTubeViewProvider {
                     <div class="history-item-title">\${escHtml(v.title)}</div>
                     <div class="history-item-id">\${v.id}</div>
                 </div>
-                <button class="history-remove" title="Remove from history" onclick="event.stopPropagation()">&#x2715;</button>
+                <button class="history-remove" title="Remove from history">&#x2715;</button>
             </li>
         \`).join('');
         list.onclick = e => {
