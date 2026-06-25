@@ -111,6 +111,16 @@ This approach bypasses the `vscode-webview://` sandbox restrictions that block Y
 
 - Initial release with sidebar and floating player
 
+## Legal Disclaimer
+
+This extension is intended as a **personal productivity and developer tool** only.
+
+- This extension does not download, store, or redistribute any YouTube content
+- You are responsible for ensuring your use complies with [YouTube's Terms of Service](https://www.youtube.com/t/terms)
+- Only watch content you have the right to access (your own uploads, Creative Commons videos, or videos explicitly permitted for third-party playback)
+- The authors of this extension are not affiliated with YouTube or Google
+- Use at your own risk
+
 ## Privacy
 
 This extension streams video directly from YouTube's CDN via yt-dlp. No data is sent to any third-party server. Your usage is subject to YouTube's Terms of Service.

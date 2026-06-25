@@ -355,6 +355,11 @@ class YouTubeViewProvider {
         </button>
     </div>
 
+    <div style="font-size:9px;opacity:0.35;line-height:1.4;padding:2px 0;flex-shrink:0">
+        For personal use only. Ensure your usage complies with
+        <a href="https://www.youtube.com/t/terms" style="color:inherit">YouTube's Terms of Service</a>.
+    </div>
+
     <div id="searching-row" class="searching-row">
         <div class="mini-spinner"></div>
         <span>Searching YouTube…</span>
