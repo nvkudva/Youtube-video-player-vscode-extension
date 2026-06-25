@@ -226,7 +226,7 @@ suite('Extension Test Suite', () => {
 
     suite('Extension activation', () => {
         test('extension activates without error', async () => {
-            const ext = vscode.extensions.getExtension('kartikgangil.youtube-player');
+            const ext = vscode.extensions.getExtension('nvkudva.youtube-player');
             if (ext) {
                 await ext.activate();
                 assert.ok(ext.isActive);
