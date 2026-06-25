@@ -125,6 +125,14 @@ This extension is intended as a **personal productivity and developer tool** onl
 
 This extension streams video directly from YouTube's CDN via yt-dlp. No data is sent to any third-party server. Your usage is subject to YouTube's Terms of Service.
 
+## Credits
+
+This extension is forked from the original work by **Kartik Gangil**:
+[github.com/Kartikgupta666/Youtube-video-player-vscode-extension](https://github.com/Kartikgupta666/Youtube-video-player-vscode-extension)
+
+The original implementation provided the sidebar and floating player UI foundation.
+Subsequent changes replace the iframe embed with yt-dlp streaming and add YouTube search.
+
 ## License
 
 MIT
