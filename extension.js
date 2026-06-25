@@ -141,10 +141,11 @@ class YouTubeViewProvider {
             );
           }
         } catch (err) {
-          webviewView.webview.postMessage({
-            command: "videoError",
-            error: err.message,
-          });
+          if (isYtdlpMissing(err)) {
+            webviewView.webview.postMessage({ command: 'ytdlpMissing' });
+          } else {
+            webviewView.webview.postMessage({ command: 'videoError', error: err.message });
+          }
         }
       } else if (msg.command === "search") {
         webviewView.webview.postMessage({ command: "searching" });
@@ -155,13 +156,18 @@ class YouTubeViewProvider {
             results,
           });
         } catch (err) {
-          webviewView.webview.postMessage({
-            command: "searchError",
-            error: err.message,
-          });
+          if (isYtdlpMissing(err)) {
+            webviewView.webview.postMessage({ command: 'ytdlpMissing' });
+          } else {
+            webviewView.webview.postMessage({ command: 'searchError', error: err.message });
+          }
         }
       } else if (msg.command === "popOut") {
         vscode.commands.executeCommand("yt.createFloatingPlayer");
+      } else if (msg.command === "installYtdlp") {
+        const term = vscode.window.createTerminal("yt-dlp install");
+        term.show();
+        term.sendText(getInstallCommand());
       }
     });
   }
@@ -216,6 +222,20 @@ class YouTubeViewProvider {
             border:1px solid #f48771; border-radius:3px;
             padding:6px 8px; font-size:11px; line-height:1.4; word-break:break-word;
         }
+
+        /* ── yt-dlp install banner ── */
+        .install-banner {
+            display:none; flex-shrink:0;
+            flex-direction:column; gap:8px;
+            background:rgba(255,200,0,0.08);
+            border:1px solid rgba(255,200,0,0.4);
+            border-radius:4px; padding:10px;
+        }
+        .install-banner-title { font-size:12px; font-weight:600; color:#e8c84a; }
+        .install-banner-desc { font-size:11px; opacity:0.75; line-height:1.5; }
+        .install-banner code { background:rgba(255,255,255,0.1); padding:1px 5px; border-radius:3px; font-family:monospace; }
+        .install-btn { background:#e8c84a; color:#1e1e1e; border:none; border-radius:3px; padding:6px 12px; cursor:pointer; font-size:12px; font-weight:600; align-self:flex-start; }
+        .install-btn:hover { background:#f0d060; }
 
         /* ── video area ── */
         .video-container {
@@ -308,6 +328,15 @@ class YouTubeViewProvider {
     </div>
 
     <div id="error-msg" class="error-msg"></div>
+
+    <div id="install-banner" class="install-banner">
+        <div class="install-banner-title">⚠ yt-dlp is not installed</div>
+        <div class="install-banner-desc">
+            This extension requires <code>yt-dlp</code> to stream videos.<br>
+            Click below to install it automatically in a terminal.
+        </div>
+        <button class="install-btn" onclick="installYtdlp()">Install yt-dlp</button>
+    </div>
 
     <div class="video-container">
         <div id="placeholder" class="placeholder">
@@ -413,6 +442,24 @@ class YouTubeViewProvider {
     function popOut() { vscode.postMessage({ command: 'popOut' }); }
 
     /* ── UI helpers ── */
+    function showInstallBanner() {
+        hideError();
+        setVideoSpinner(false);
+        setSearchSpinner(false);
+        document.getElementById('action-btn').disabled = false;
+        document.getElementById('install-banner').style.display = 'flex';
+    }
+
+    function hideInstallBanner() {
+        document.getElementById('install-banner').style.display = 'none';
+    }
+
+    function installYtdlp() {
+        hideInstallBanner();
+        setStatus('Installing yt-dlp in terminal…');
+        vscode.postMessage({ command: 'installYtdlp' });
+    }
+
     function showError(msg) {
         const el = document.getElementById('error-msg');
         el.textContent = msg;
@@ -431,7 +478,12 @@ class YouTubeViewProvider {
     window.addEventListener('message', event => {
         const msg = event.data;
 
+        if (msg.command === 'ytdlpMissing') {
+            showInstallBanner();
+        }
+
         if (msg.command === 'loading') {
+            hideInstallBanner();
             setVideoSpinner(true);
             document.getElementById('placeholder').style.display = 'none';
         }
