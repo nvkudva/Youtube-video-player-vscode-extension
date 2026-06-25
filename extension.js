@@ -305,6 +305,14 @@ class YouTubeViewProvider {
         .history-item-info { overflow:hidden; }
         .history-item-title { font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
         .history-item-id { font-size:10px; opacity:0.45; }
+        .history-remove {
+            margin-left:auto; flex-shrink:0;
+            background:none; border:none; color:inherit;
+            opacity:0; font-size:14px; line-height:1;
+            cursor:pointer; padding:2px 4px; border-radius:3px;
+        }
+        .history-item:hover .history-remove { opacity:0.45; }
+        .history-remove:hover { opacity:1 !important; background:rgba(255,255,255,0.1); }
 
         /* searching spinner */
         .searching-row {
@@ -577,6 +585,12 @@ class YouTubeViewProvider {
         try { localStorage.setItem('yt-history', JSON.stringify(watchHistory)); } catch (e) {}
     }
 
+    function removeFromHistory(videoId) {
+        watchHistory = watchHistory.filter(v => v.id !== videoId);
+        try { localStorage.setItem('yt-history', JSON.stringify(watchHistory)); } catch (e) {}
+        showHistory();
+    }
+
     function showHistory() {
         renderHistory();
         document.getElementById('history-section').style.display =
@@ -586,14 +600,24 @@ class YouTubeViewProvider {
     function renderHistory() {
         const list = document.getElementById('history-list');
         list.innerHTML = watchHistory.map(v => \`
-            <li class="history-item" onclick="loadVideo('\${v.id}')">
+            <li class="history-item" data-id="\${escHtml(v.id)}">
                 <img src="\${v.thumbnail}" alt="" loading="lazy">
                 <div class="history-item-info">
                     <div class="history-item-title">\${escHtml(v.title)}</div>
                     <div class="history-item-id">\${v.id}</div>
                 </div>
+                <button class="history-remove" title="Remove from history" onclick="event.stopPropagation()">&#x2715;</button>
             </li>
         \`).join('');
+        list.onclick = e => {
+            const item = e.target.closest('.history-item');
+            if (!item) return;
+            if (e.target.classList.contains('history-remove')) {
+                removeFromHistory(item.dataset.id);
+            } else {
+                loadVideo(item.dataset.id);
+            }
+        };
         if (watchHistory.length > 0) {
             document.getElementById('history-section').style.display = 'flex';
         }
