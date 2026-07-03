@@ -114,7 +114,7 @@ function getFloatingPlayerContent(streamUrl, videoId) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; media-src https:; script-src 'unsafe-inline'; style-src 'unsafe-inline';">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; media-src https:; connect-src https:; script-src 'unsafe-inline'; style-src 'unsafe-inline';">
     <style>
         body { margin:0; background:#000; display:flex; flex-direction:column; height:100vh; color:#d4d4d4; font-family:sans-serif; }
         .toolbar { background:#1e1e1e; padding:5px 10px; display:flex; align-items:center; gap:8px; font-size:12px; }
@@ -224,7 +224,7 @@ class YouTubeViewProvider {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; media-src https:; img-src https://i.ytimg.com; script-src 'unsafe-inline'; style-src 'unsafe-inline';">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; media-src https:; connect-src https:; img-src https://i.ytimg.com; script-src 'unsafe-inline'; style-src 'unsafe-inline';">
     <style>
         * { box-sizing:border-box; margin:0; padding:0; }
         body {
